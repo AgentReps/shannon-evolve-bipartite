@@ -1,0 +1,18 @@
+# shannon-evolve strategies
+#
+# One line per branch. Lines starting with # and blank lines are ignored.
+# run.sh expects at least N_BRANCHES (default 4) non-empty lines.
+#
+# These defaults match the LABS (merit-factor) placeholder. Replace for
+# your own problem. Pick families that are genuinely different —
+# variants of the same idea will converge into the same local optimum.
+#
+# Guideline: a good strategy bias names (a) a *mutation operator* or
+# *construction principle* the branch will favor, and (b) a *neighborhood
+# size* or *step type*. "Local search" is too generic; "single-flip tabu
+# with adaptive tenure" is the right granularity.
+
+algebraic construction: Legendre / Jacobi / Rudin-Shapiro / m-sequences and structured rotations of them
+local search: single-flip and segment-flip hill climbing, simulated annealing on the merit-factor landscape
+tabu / metaheuristic: tabu search with restart, large-neighborhood search, ILS with kick moves
+hybrid construction + repair: start from a structured construction, then run targeted bit-flips to suppress the worst autocorrelation lags

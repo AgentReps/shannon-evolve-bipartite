@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.out
+.DS_Store
+STOP
+# worktrees live outside the repo by default, but ignore if anyone puts
+# them inside:
+shannon-evolve-runs/
+# runtime state written by step.py in solo mode:
+log/state-*.json
+log/elites/
+log/branch-solo.md
