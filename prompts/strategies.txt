@@ -3,16 +3,18 @@
 # One line per branch. Lines starting with # and blank lines are ignored.
 # run.sh expects at least N_BRANCHES (default 4) non-empty lines.
 #
-# These defaults match the LABS (merit-factor) placeholder. Replace for
-# your own problem. Pick families that are genuinely different —
-# variants of the same idea will converge into the same local optimum.
+# Problem: distributed bipartite matching. You evolve two purely-local rules in
+# solution.py — thin(degree, rng) at NOTIFY and select(neighbor_degrees, rng) at
+# GRANT — to maximize the mean matching fraction over the fixed density sweep
+# (N=144, Binomial, d in {2,3,4,5,6,8,10}). Respect the locality contract: the
+# rules only ever see one sender's own out-degree / own neighbors' degrees.
+# Baseline DB(0) ~0.63; the bar to beat is 2CGS ~0.73 (robust, tuning-free).
 #
-# Guideline: a good strategy bias names (a) a *mutation operator* or
-# *construction principle* the branch will favor, and (b) a *neighborhood
-# size* or *step type*. "Local search" is too generic; "single-flip tabu
-# with adaptive tenure" is the right granularity.
+# Pick families that are genuinely different — variants of the same idea
+# converge into the same local optimum. A good bias names a *rule family* and a
+# *parameter to move*, not just "do better".
 
-algebraic construction: Legendre / Jacobi / Rudin-Shapiro / m-sequences and structured rotations of them
-local search: single-flip and segment-flip hill climbing, simulated annealing on the merit-factor landscape
-tabu / metaheuristic: tabu search with restart, large-neighborhood search, ILS with kick moves
-hybrid construction + repair: start from a structured construction, then run targeted bit-flips to suppress the worst autocorrelation lags
+selection tuning: DB(alpha) with alpha <= 0 — sweep the exponent from uniform (0) toward greedy (-inf) and find the degree-bias that maximizes the mean fraction across the sweep; remember the optimum grows with density (greedy when sparse, alpha ~ -1.3 when dense)
+thinning: cap the notified out-degree with max(k) and dilute with Bern(q) — find the k (2CGS's sweet spot is k=2) and q that reshape the intention-graph degrees for the most matches, paired with greedy selection
+joint thinning x selection: co-tune the thinning cap K and the selection exponent ALPHA together; the goal is to beat 2CGS's ~0.73 robustly across ALL densities, not just one
+novel local rules: invent leak-free decision functions beyond plain DB(alpha) — degree-threshold grants, degree-adaptive thinning (keep more neighbors when your own degree is high), smarter randomized-greedy tie handling, or two-stage local heuristics

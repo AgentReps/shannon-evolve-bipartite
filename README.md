@@ -22,15 +22,21 @@ each component onto the simplest substrate that still works:
 `step.py` is the one place the protocol is mechanical. Everything else
 is the model reading CLAUDE.md.
 
-## Placeholder problem
+## Problem
 
-The shipped `solution.py` targets the **low-autocorrelation binary
-sequence** (LABS) problem at `N = 60`: find `b ∈ {-1, +1}^60` maximizing
-the merit factor `F(b) = N² / (2 Σ c_k(b)²)`. This is a genuine open
-combinatorial-search problem in signal design — random sequences score
-about 0.1, structured constructions (Legendre/Jacobi) reach about 0.6,
-and the best known via search is ~0.85. There is no closed form for the
-optimum, so the four branches actually have something to do.
+The shipped `solution.py` targets **distributed bipartite matching** at
+`N = 144`: match as many sender–receiver pairs as possible in a single
+four-stage message round (`NOTIFY → REQ → GRANT → ACCEPT`) where every node
+acts only on local information. You evolve two purely-local rules —
+`thin(degree, rng)` (NOTIFY thinning) and `select(neighbor_degrees, rng)`
+(GRANT selection) — and `evaluate.py` scores the mean matching fraction by
+Monte Carlo over a fixed Binomial density sweep (`d ∈ {2,3,4,5,6,8,10}`)
+with common random numbers. The "no information leakage" constraint is
+enforced by the function signatures themselves: a rule is never handed the
+global graph. Baseline DB(0) ≈ 0.63; the robust bar to beat, 2CGS, ≈ 0.73.
+See `CLAUDE.md` for the full statement and `description/` for the source
+model. This is a genuinely open combinatorial design problem, so the four
+branches have something to do.
 
 Replace `solution.py` and the "Problem" section of `CLAUDE.md` for your
 own problem.
@@ -102,8 +108,8 @@ on writing rubrics that don't degrade into "yes, this is great".
 shannon-evolve/
 ├── README.md                      # this file
 ├── CLAUDE.md                      # the spec each branch reads
-├── solution.py                    # artifact being evolved (LABS placeholder)
-├── evaluate.py                    # scalar scorer
+├── solution.py                    # artifact being evolved (thin + select rules)
+├── evaluate.py                    # Monte-Carlo matching-fraction scorer
 ├── step.py                        # bookkeeping helper the agent calls per iteration
 ├── run.sh                         # spawns N parallel worktrees
 ├── digest.sh                      # cross-pollination step

@@ -84,9 +84,10 @@ def main() -> int:
     state_path.write_text(json.dumps(state))
 
     decision = "KEEP (new best)" if is_new_best else "no improvement"
-    # Human-readable log shows only problem-specific scalars (merit_factor,
-    # error) — not timing, which clutters the line and is rarely diagnostic.
-    log_extras_keys = ("merit_factor", "error")
+    # Human-readable log shows only problem-specific scalars (mean_fraction,
+    # ci95_halfwidth, error) — not timing, which clutters the line and is
+    # rarely diagnostic.
+    log_extras_keys = ("mean_fraction", "ci95_halfwidth", "error")
     extras_pretty = ", ".join(
         f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
         for k, v in extra.items()

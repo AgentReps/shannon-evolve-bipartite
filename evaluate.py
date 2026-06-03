@@ -1,129 +1,149 @@
-"""Scalar evaluator for the LABS placeholder.
+"""Monte-Carlo evaluator for distributed bipartite matching.
 
-Prints a single JSON line to stdout. Reads `solution.py` from the cwd.
+Prints a single JSON line to stdout. Imports `thin` and `select` from
+`solution.py` in the cwd and runs the one-round protocol on many random
+feasible graphs, scoring by the **mean matching fraction**.
 
 Usage:
     python3 evaluate.py                   # scalar mode (default)
-    JUDGE_MODE=true python3 evaluate.py   # LLM-as-judge fallback
+    JUDGE_MODE=true python3 evaluate.py   # LLM-as-judge fallback (inert here)
 
 Design notes:
-- For *cheap* evaluators (like this one — computing a merit factor is
-  O(N^2) at N=60), a single stage is fine. When you adopt the template
-  for an expensive evaluator, add a quick/medium/full cascade: have
-  `evaluate()` short-circuit on a cheap proxy and only run the full
-  scorer when the proxy clears a threshold.
-- `_run_solve` invokes solve() in a fresh subprocess so the agent can't
-  accidentally leak state across attempts (caches, RNG, module globals).
-- Shape verification rejects malformed returns *before* scoring. This is
-  the template's anti-gaming hook: extend it per problem with sanity
-  checks the evaluator can run cheaply (canary inputs, invariants, etc.).
+- The score is averaged over a FIXED robustness sweep of mean degrees on the
+  Binomial D-out model at N=144 (see constants below). All randomness is derived
+  from a fixed MASTER_SEED via SeedSequence, and the feasible graph for each
+  (density, rep) is generated from its own dedicated stream BEFORE any call into
+  the solution. So every attempt is scored on byte-identical feasible graphs —
+  *common random numbers* — making comparisons paired and the search monotone.
+- No information can leak: the solution's `thin`/`select` are handed only a single
+  sender's own out-degree (NOTIFY) and its own neighbors' degrees (GRANT). The
+  evaluator validates the returned indices and scores any violation as `invalid`.
+- The matching size is the number of receivers that receive >=1 grant (the ACCEPT
+  stage does not change the count), so we tally right after GRANT.
 """
 import json
-import math
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 # ----------------------------------------------------------------------------
-# Constants the agent reads. TUNE_ME per problem.
+# Constants the agent reads. These define the problem — do not tune to inflate
+# the score. They are FIXED for the network and the feasible-graph model.
 # ----------------------------------------------------------------------------
-N = 60                  # sequence length; must match solution.py
-TARGET_SCORE = 1.0      # MF >= 10 caps the score; effectively never stop early
-MAX_ATTEMPTS = 30       # per-branch attempt budget
-MF_SCALE = 10.0         # score = min(merit_factor / MF_SCALE, 1.0)
+N = 144                                  # senders = receivers
+DIST = "binomial"                        # D_u ~ Bin(N, d/N), then D_u distinct receivers
+DENSITIES = (2, 3, 4, 5, 6, 8, 10)       # mean-degree sweep the score averages over
+REPS = 200                               # Monte-Carlo reps per density (common random numbers)
+MASTER_SEED = 20240601                   # fixes the sampled graphs across all attempts
+TARGET_SCORE = 1.0                       # unreachable cap; run the full attempt budget
+MAX_ATTEMPTS = 40                        # per-branch attempt budget
 
 
 class NotApplicableError(Exception):
     """Raised when a scalar score isn't natural; triggers JUDGE_MODE fallback."""
 
 
+class InvalidSolution(Exception):
+    """The solution returned an index that violates the locality / shape contract."""
+
+
 # ----------------------------------------------------------------------------
-# Run solve() in a subprocess and return whatever it returned.
+# One matching round (NOTIFY + GRANT), parameterized by the solution's rules.
 # ----------------------------------------------------------------------------
-def _run_solve(timeout: float = 60.0) -> tuple[list[int], float]:
-    """Run solve() in a fresh subprocess. Return (sequence, wall_seconds)."""
-    code = (
-        "import sys, json, time\n"
-        "sys.path.insert(0, '.')\n"
-        "from solution import solve\n"
-        "t = time.perf_counter(); v = solve(); dt = time.perf_counter() - t\n"
-        "print(json.dumps({'value': list(v), 'time': dt}))\n"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True, text=True, timeout=timeout,
-    )
-    if out.returncode != 0:
-        raise RuntimeError(f"solve failed: {out.stderr[:500]}")
-    # Take the last JSON-looking line so prints inside solve() don't break us.
-    for line in reversed(out.stdout.strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            data = json.loads(line)
-            return data["value"], data["time"]
-    raise RuntimeError("solve produced no JSON line")
+def _feasible_graph(rng: np.random.Generator, d: float) -> list[np.ndarray]:
+    """Binomial D-out feasible graph: each sender draws D_u ~ Bin(N, d/N) and
+    picks D_u distinct receivers uniformly. Returns adjacency per sender."""
+    degs = np.minimum(rng.binomial(N, d / N, size=N), N)
+    return [rng.choice(N, size=int(k), replace=False) for k in degs]
 
 
-def _verify_shape(seq) -> str | None:
-    """Return None if seq is a valid ±1 sequence of length N, else an error string."""
-    if not isinstance(seq, list):
-        return f"expected list, got {type(seq).__name__}"
-    if len(seq) != N:
-        return f"expected length {N}, got {len(seq)}"
-    bad = [x for x in seq if x not in (-1, 1)]
-    if bad:
-        return f"non-±1 values present (first offender: {bad[0]!r})"
-    return None
+def _check_thin(idx, degree: int) -> np.ndarray:
+    idx = np.asarray(idx)
+    if idx.ndim != 1 or idx.dtype.kind not in "iu":
+        raise InvalidSolution(f"thin must return a 1-D int array, got {idx!r}")
+    if idx.size > degree:
+        raise InvalidSolution(f"thin returned {idx.size} indices for degree {degree}")
+    if idx.size and (idx.min() < 0 or idx.max() >= degree):
+        raise InvalidSolution(f"thin index out of range [0,{degree})")
+    if np.unique(idx).size != idx.size:
+        raise InvalidSolution("thin returned duplicate indices")
+    return idx
 
 
-def _merit_factor(seq: list[int]) -> float:
-    n = len(seq)
-    total = 0
-    for k in range(1, n):
-        c = 0
-        for i in range(n - k):
-            c += seq[i] * seq[i + k]
-        total += c * c
-    if total == 0:
-        return float("inf")
-    return n * n / (2.0 * total)
+def _round_fraction(thin, select, adj: list[np.ndarray], rng: np.random.Generator) -> float:
+    # Stage 0 NOTIFY: each sender thins its own feasible neighbors.
+    kept = [a[_check_thin(thin(a.size, rng), a.size)] for a in adj]
 
+    # Stage 1 REQ: receivers report their intention-graph degree.
+    nonempty = [k for k in kept if k.size]
+    if not nonempty:
+        return 0.0
+    deg_receiver = np.bincount(np.concatenate(nonempty), minlength=N)
 
-def _score(mf: float) -> float:
-    if not math.isfinite(mf):
-        return 1.0
-    return max(0.0, min(1.0, mf / MF_SCALE))
+    # Stage 2 GRANT: each sender with >=1 neighbor grants to one of them.
+    granted = np.zeros(N, dtype=bool)
+    for k in kept:
+        if k.size:
+            j = select(deg_receiver[k], rng)
+            if not (isinstance(j, (int, np.integer)) and 0 <= int(j) < k.size):
+                raise InvalidSolution(f"select returned index {j!r} for {k.size} neighbors")
+            granted[k[int(j)]] = True
+
+    # Matching size = number of receivers that got >=1 grant.
+    return int(granted.sum()) / N
 
 
 def evaluate() -> dict:
-    """Single-stage evaluation. Returns a dict suitable for JSON dump."""
     t0 = time.perf_counter()
     try:
-        seq, solve_time = _run_solve(timeout=60.0)
+        sys.path.insert(0, ".")
+        # Force a fresh import so repeated runs in one process pick up edits.
+        for m in ("solution",):
+            sys.modules.pop(m, None)
+        from solution import select, thin
     except Exception as e:  # noqa: BLE001
-        return {"score": 0.0, "stage": "error", "error": str(e)[:300],
+        return {"score": 0.0, "stage": "error", "error": f"import: {str(e)[:280]}",
                 "time": time.perf_counter() - t0}
 
-    shape_err = _verify_shape(seq)
-    if shape_err is not None:
-        return {"score": 0.0, "stage": "invalid", "error": shape_err,
+    per_density: dict[str, float] = {}
+    all_fractions: list[float] = []
+    try:
+        for di, d in enumerate(DENSITIES):
+            fr = np.empty(REPS, dtype=np.float64)
+            for rep in range(REPS):
+                child = np.random.SeedSequence([MASTER_SEED, di, rep])
+                g_seed, a_seed = child.spawn(2)
+                adj = _feasible_graph(np.random.default_rng(g_seed), d)
+                fr[rep] = _round_fraction(thin, select, adj, np.random.default_rng(a_seed))
+            per_density[str(d)] = float(fr.mean())
+            all_fractions.extend(fr.tolist())
+    except InvalidSolution as e:
+        return {"score": 0.0, "stage": "invalid", "error": str(e)[:280],
+                "time": time.perf_counter() - t0}
+    except Exception as e:  # noqa: BLE001
+        return {"score": 0.0, "stage": "error", "error": str(e)[:280],
                 "time": time.perf_counter() - t0}
 
-    mf = _merit_factor(seq)
+    arr = np.asarray(all_fractions)
+    mean = float(arr.mean())
+    sem = float(arr.std(ddof=1) / np.sqrt(arr.size)) if arr.size > 1 else 0.0
     return {
-        "score": _score(mf),
+        "score": mean,
         "stage": "full",
-        "merit_factor": mf,
+        "mean_fraction": mean,
+        "ci95_halfwidth": 1.96 * sem,
+        "per_density": per_density,
         "time": time.perf_counter() - t0,
-        "solve_time": solve_time,
     }
 
 
 # ----------------------------------------------------------------------------
-# LLM-as-judge fallback. Use when no natural scalar exists. Calls `claude -p`
-# with the rubric in prompts/judge.md.
+# LLM-as-judge fallback. Inert for this problem (we have a real scalar), kept for
+# template compatibility. Calls `claude -p` with the rubric in prompts/judge.md.
 # ----------------------------------------------------------------------------
 def judge_mode() -> dict:
     rubric = Path("prompts/judge.md").read_text()

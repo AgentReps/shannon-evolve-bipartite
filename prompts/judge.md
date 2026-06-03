@@ -32,10 +32,13 @@ These exist because LLM judges drift toward generous scores. Resist that.
 
 ## Domain hooks
 
-> Replace this section with 2–3 dimensions specific to the problem.
-> For a manuscript: correctness of statements, clarity of exposition,
-> brevity. For a proof: rigor, generality, elegance. For a design doc:
-> specificity, testability, alignment with constraints.
+> This problem has a natural scalar score (the mean matching fraction from
+> `evaluate.py`), so JUDGE_MODE is normally **not** used. If you do invoke it,
+> judge along: (1) **locality** — does the change keep `thin`/`select` within
+> the local view (own degree / own neighbors' degrees only), with no global
+> state? (2) **validity** — would the returned indices stay in range? (3)
+> **plausible gain** — is there a principled reason it raises the matching
+> fraction across the density sweep, not just at one density?
 
 ## Output format
 

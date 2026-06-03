@@ -6,29 +6,45 @@ carefully and persistently.
 
 ## Problem
 
-> **EDIT THIS SECTION FOR YOUR PROBLEM.** Leave the rest of the file alone
-> unless you have a specific reason to change it.
+**Distributed bipartite matching.** `N = 144` senders and `N` receivers
+form a bipartite *feasible* graph (each sender is willing to match with a
+set of receivers). In a single round of four synchronous, message-passing
+stages — `NOTIFY → REQ → GRANT → ACCEPT` — we want to match as many
+sender–receiver pairs as possible. The catch is the **information
+constraint**: no node sees the whole graph. A sender knows only its own
+neighbors and, after the REQ replies, those neighbors' degrees; a receiver
+knows only the grants it got. The matching size equals the number of
+receivers that receive at least one grant.
 
-The placeholder `solution.py` constructs a binary ±1 sequence of length
-`N = 60` and the goal is to maximize its **merit factor**
+**The objective** is to maximize the **expected matching fraction**
+(matched pairs / N). `evaluate.py` estimates it by Monte Carlo over a
+*fixed* robustness sweep — Binomial D-out graphs at mean degree
+`d ∈ {2,3,4,5,6,8,10}`, ~200 reps each, with common random numbers (a
+fixed seed) so every attempt is scored on identical graphs and the search
+is monotone. The reported `score` is the mean matching fraction in `[0,1]`
+(no rescaling). The full network/model parameters are fixed in
+`evaluate.py` and must not be changed — they are the problem definition.
 
-```
-F(b) = N^2 / (2 * sum_{k=1}^{N-1} c_k(b)^2),
-    c_k(b) = sum_{i=0}^{N-1-k} b_i * b_{i+k}
-```
+**What you evolve** (in `solution.py`, between the EVOLVE-BLOCK markers)
+are two purely-local decision rules and their constants:
 
-`evaluate.py` reports `score = min(F / 10, 1)`. Reference points at
-`N = 60`:
+- `thin(degree, rng)` — NOTIFY-stage thinning. Sees only this sender's own
+  feasible out-degree; returns the indices of neighbors to notify.
+- `select(neighbor_degrees, rng)` — GRANT-stage selection. Sees only the
+  intention-graph degrees of this sender's own neighbors; returns the index
+  of the one to grant to.
 
-- random ±1 sequences: F ≈ 1 (score ≈ 0.1)
-- structured constructions (Legendre/Jacobi, rotated): F up to ~6 (score ≈ 0.6)
-- best known via search (tabu, branch-and-bound): F ≈ 8–9 (score ≈ 0.85)
+**No information leakage** is enforced structurally: these signatures never
+expose the global graph or any other node's data, and `evaluate.py`
+validates the returned indices (out-of-range → `score = 0`, stage
+`invalid`). Any creative rule is fair game *as long as it stays within this
+local view*.
 
-There is no closed form for the optimum; this is a genuinely open
-combinatorial-search problem in signal design.
-
-Replace this paragraph with your actual problem statement, baseline
-score, and target score when you adopt the template.
+**Reference points** (mean fraction over the sweep): DB(0) uniform ≈ **0.63**
+(the shipped baseline); DB(−∞) greedy is best when sparse but collapses when
+dense; **2CGS** (`max(2)` thinning + greedy) ≈ **0.73**, robust and
+tuning-free — the bar to beat. Known solution paths (DB(α), greedy, 2CGS)
+are written out as copy-ready seeds in the comments of `solution.py`.
 
 ## Mode
 
