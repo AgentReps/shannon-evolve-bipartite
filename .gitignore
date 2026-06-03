@@ -10,3 +10,9 @@ shannon-evolve-runs/
 log/state-*.json
 log/elites/
 log/branch-solo.md
+# Python virtualenvs and tooling caches (never commit these):
+.venv/
+.pytest_cache/
+# description/ is a reference copy — keep the reproduced figures on disk
+# but don't stage them:
+description/scratch/*.png
