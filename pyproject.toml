@@ -1,0 +1,9 @@
+[project]
+name = "shannon-evolve-bipartite"
+version = "0.1.0"
+description = "Evolutionary search over distributed bipartite matching algorithms."
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+
+[tool.uv]
+dev-dependencies = []
